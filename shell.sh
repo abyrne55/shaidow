@@ -2,8 +2,15 @@
 # Generated-by: Claude 4 Sonnet
 
 # Interactive Shell Logger
-# Logs commands and outputs with unique identifiers
-# Usage: ./interactive_logger.sh [logfile]
+# Logs commands and outputs in JSONL format
+# Usage: ./shell.sh [logfile]
+
+# Check for jq dependency
+if ! command -v jq &> /dev/null; then
+    echo "Error: jq is required but not installed."
+    echo "Please install jq: sudo apt-get install jq (Ubuntu/Debian) or brew install jq (macOS)"
+    exit 1
+fi
 
 # Set default log file if not provided
 LOGFILE="${1:-shell_session.log}"
@@ -82,7 +89,7 @@ log_processor() {
 interactive_shell() {
     local log_file="$1"
     
-    echo "Starting interactive shell with logging to: $log_file"
+    echo "Starting interactive shell with JSONL logging to: $log_file"
     echo "Type 'exit' to quit the logged shell session."
     echo "----------------------------------------"
     
@@ -104,30 +111,43 @@ interactive_shell() {
             continue
         fi
         
-        # Log the command
-        echo "RAN [$COMMAND_COUNTER]: $user_command" >> "$log_file"
+        # Capture all output into a variable
+        local full_output=""
+        local exit_status=0
         
         # Execute the command and capture output
-        {
-            eval "$user_command" 2>&1
-        } | while IFS= read -r output_line; do
-            echo "GOT [$COMMAND_COUNTER]: $output_line" >> "$log_file"
-            echo "$output_line"
-        done
+        full_output=$(eval "$user_command" 2>&1)
+        exit_status=$?
         
-        # Handle the case where command produces no output
-        if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
-            echo "GOT [$COMMAND_COUNTER]: (command exited with status ${PIPESTATUS[0]})" >> "$log_file"
+        # Display output to user
+        if [[ -n "$full_output" ]]; then
+            echo "$full_output"
         fi
+        
+        # Add exit status to output if non-zero
+        if [[ $exit_status -ne 0 ]]; then
+            if [[ -n "$full_output" ]]; then
+                full_output="$full_output"$'\n'"(command exited with status $exit_status)"
+            else
+                full_output="(command exited with status $exit_status)"
+            fi
+        fi
+        
+        # Create JSON object and append to log file using jq for proper escaping
+        jq -nc \
+            --arg id "$COMMAND_COUNTER" \
+            --arg command "$user_command" \
+            --arg output "$full_output" \
+            '{id: $id, command: $command, output: $output}' >> "$log_file"
         
         ((COMMAND_COUNTER++))
     done
 }
 
 # Main execution
-echo "Interactive Shell Logger"
+echo "Interactive Shell Logger (JSONL Format)"
 echo "Log file: $LOGFILE"
-echo "========================"
+echo "========================================"
 
 # Start the interactive shell with logging
 interactive_shell "$LOGFILE"
