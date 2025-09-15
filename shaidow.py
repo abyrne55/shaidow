@@ -3,18 +3,18 @@ import llm
 import os
 import tempfile
 import argparse
-from dotenv import load_dotenv
 from rich import print
 from rich.console import Console
 from rich.markup import escape
 from rich.markdown import Markdown
 from rich.text import Text
+from rich.theme import Theme
 
 system_prompt = """
 You are a helpful (and sometimes playful) assistant to a site reliability engineer (SRE) investigating alerts and other problems with OpenShift 4 clusters.
 You will be shown the output of shell commands the SRE uses during their investigation. 
 Your job is to point out any interesting or important information in the output that the SRE may have missed.
-You may also suggest a command to run if you think it will help investigate the problem further.
+You may also suggest a command to run if you think it will help investigate the problem further. Use Markdown shell code block formatting for commands longer than 10 characters.
 The SRE may send you messages directly via shell comments starting with `#`. Respond to these messages as if the SRE is speaking to you directly.
 You may ask follow-up questions to the SRE to clarify the problem or their intent. Once per conversation at most, you may concisely remind the SRE that they can respond to your questions via shell comments.
 If the SRE runs a command that is not related to the investigation, ignore it and do not respond at all.
@@ -22,10 +22,10 @@ If you are not confident that you can meaningfully comment on specific output, d
 The SRE may not always follow your advice. Defer to the SRE's judgement. If the SRE appears to want to go down a different investigation path, do not try to dissuade them.
 You may be provided with one or more standard operating procedures (SOPs) written in Markdown format. These may inform your responses but should not be treated as gospel. 
 If SOPs are provided, make note of any actions the SRE takes that may indicate the SOP needs revision/updating. Offer to help the SRE update SOPs near the end of the investigation.
-Keep your responses very concise (ideally 20 words or fewer, excluding suggested commands).
-Use Markdown formatting and emoji where appropriate.
+Keep your responses very concise, i.e., less than 19 words on average, excluding suggested commands). Avoid redundant phrases like "Please share the output" or "I see that you ran that command."
+Use Markdown formatting where appropriate. Use emoji sparingly.
 """
-console = Console()
+console = Console(theme=Theme({"markdown.code": "bold green on gray37", "markdown.code_block": "green on gray37"}))
 
 class Command:
     def __init__(self, id, command, output):
@@ -74,16 +74,20 @@ def main(conversation: llm.Conversation, fifo_path: str):
                 
             try:
                 header = Text.assemble(
-                    (escape(f"\n[{cmd.id}]"), "dim bold"),
+                    (escape(f"[{cmd.id}]"), "dim bold"),
                     (escape(f" {cmd.command}"), "dim")
                 )
                 if not args.verbose:
                     header.truncate(40, overflow="ellipsis")
-                console.print(header)
+                console.print("")
+                console.rule(header, align="left", style="dim")
                 response_text = ""
                 response_usage = None
                 with console.status("Thinking..."):
-                    response = conversation.prompt(build_prompt(cmd), google_search=1, code_execution=1)
+                    if "gemini" in conversation.model.model_id.lower():
+                        response = conversation.prompt(build_prompt(cmd), system=system_prompt, google_search=1, code_execution=1)
+                    else:
+                        response = conversation.prompt(build_prompt(cmd), system=system_prompt)
                     response_text = response.text()
                     response_usage = response.usage()
                 console.print(Markdown(response_text))
@@ -93,13 +97,12 @@ def main(conversation: llm.Conversation, fifo_path: str):
                 console.print(f"Error processing command {cmd.id}: {e}")
                 continue
 
-load_dotenv()
-
 # Parse command line arguments
 parser = argparse.ArgumentParser(description='SRE assistant that reads commands from a FIFO')
 parser.add_argument('--fifo', '-f', type=str, help='Path to FIFO file (will be created if it does not exist)')
 parser.add_argument('--sop', '-s', action='append', type=argparse.FileType('r', encoding='UTF-8'), help="Path to a local copy of an SOP to add to the LLM's context window")
 parser.add_argument('--verbose', '-v', action='store_true', help="Verbose output (including LLM token usage)")
+parser.add_argument('--model', '-m', type=str, default='gemini-2.5-flash', help='LLM to use')
 args = parser.parse_args()
 
 # Create a FIFO
@@ -115,14 +118,10 @@ else:
     fifo_path = os.path.join(temp_dir, "fifo")
     os.mkfifo(fifo_path)
 
-print(f"Reading from {fifo_path}")
+print(f"Pipe your shell into {fifo_path}")
 
 # Configure the model
-model = llm.get_model("gemini-2.5-flash")
-api_key = os.getenv("LLM_GEMINI_KEY")
-if not api_key:
-    print("Warning: LLM_GEMINI_KEY environment variable not set")
-model.key = api_key
+model = llm.get_model(args.model)
 conversation = model.conversation()
 
 # Read any SOPs
@@ -141,6 +140,7 @@ with console.status("Initializing LLM..."):
     if args.verbose:
         console.print(init_response.usage(), style="dim italic")
 
+# Start the main chat loop
 main(conversation, fifo_path)
 
 # Clean up the FIFO and temporary directory after main completes
