@@ -102,7 +102,7 @@ parser = argparse.ArgumentParser(description='SRE assistant that reads commands 
 parser.add_argument('--fifo', '-f', type=str, help='Path to FIFO file (will be created if it does not exist)')
 parser.add_argument('--sop', '-s', action='append', type=argparse.FileType('r', encoding='UTF-8'), help="Path to a local copy of an SOP to add to the LLM's context window")
 parser.add_argument('--verbose', '-v', action='store_true', help="Verbose output (including LLM token usage)")
-parser.add_argument('--model', '-m', type=str, default='gemini-2.5-flash', help='LLM to use')
+parser.add_argument('--model', '-m', type=str, default='gemini-2.5-pro', help='LLM to use')
 args = parser.parse_args()
 
 # Create a FIFO
@@ -118,7 +118,8 @@ else:
     fifo_path = os.path.join(temp_dir, "fifo")
     os.mkfifo(fifo_path)
 
-print(f"Pipe your shell into {fifo_path}")
+if args.verbose:
+    print(f"Pipe your shell into {fifo_path}")
 
 # Configure the model
 model = llm.get_model(args.model)

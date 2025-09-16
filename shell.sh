@@ -89,8 +89,9 @@ log_processor() {
 interactive_shell() {
     local log_file="$1"
     
-    echo "Starting interactive shell with JSONL logging to: $log_file"
-    echo "Type 'exit' to quit the logged shell session."
+    echo "Commands/outputs will be logged to $log_file"
+    echo "Type 'exit' or press Ctrl+C to quit the shell session."
+    echo "Prompt may not appear until LLM is ready."
     echo "----------------------------------------"
     
     # Clear the log file
@@ -143,11 +144,6 @@ interactive_shell() {
         ((COMMAND_COUNTER++))
     done
 }
-
-# Main execution
-echo "Interactive Shell Logger (JSONL Format)"
-echo "Log file: $LOGFILE"
-echo "========================================"
 
 # Start the interactive shell with logging
 interactive_shell "$LOGFILE"
