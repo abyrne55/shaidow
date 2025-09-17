@@ -121,6 +121,9 @@ tmux new-session -d -s "$SESSION_NAME" -c "$SCRIPT_DIR" "$SCRIPT_DIR/shell.sh" "
 # Split the window vertically and run shaidow.py in the right pane
 tmux split-window -h -t "$SESSION_NAME:0" -c "$SCRIPT_DIR" "python3 $SCRIPT_DIR/shaidow.py --fifo '$FIFO_PATH' $*"
 
+# Disable the status bar
+tmux set-option -t "$SESSION_NAME" status off
+
 # Configure the session to exit when the left pane (shell.sh) exits
 # This ensures that when the user exits the shell, the entire session terminates
 tmux set-hook -t "$SESSION_NAME" pane-exited "if-shell -F '#{==:#{pane_index},0}' 'kill-session'"
