@@ -25,7 +25,7 @@ If SOPs are provided, make note of any actions the SRE takes that may indicate t
 Keep your responses very concise, i.e., less than 19 words on average, excluding suggested commands). Avoid redundant phrases like "Please share the output" or "I see that you ran that command."
 Use Markdown formatting where appropriate. Use emoji sparingly.
 """
-console = Console(theme=Theme({"markdown.code": "bold green on gray37", "markdown.code_block": "green on gray37"}))
+console = Console(theme=Theme({"markdown.code": "bold green on gray93", "markdown.code_block": "green on gray93"}))
 
 class Command:
     def __init__(self, id, command, output):
@@ -58,7 +58,7 @@ def build_prompt(cmd: Command):
     ```
     """
 
-def main(conversation: llm.Conversation, fifo_path: str):
+def main(conversation: llm.Conversation, fifo_path: str, sysprompt_only_once: bool):
     with open(fifo_path, 'r') as fifo:
         while True:
             line = fifo.readline()
@@ -87,11 +87,15 @@ def main(conversation: llm.Conversation, fifo_path: str):
                 console.rule(header, align="left", style="dim")
                 response_text = ""
                 response_usage = None
+                if sysprompt_only_once:
+                    sysprompt = None
+                else:
+                    sysprompt = system_prompt
                 with console.status("Thinking..."):
                     if "gemini" in conversation.model.model_id.lower():
-                        response = conversation.prompt(build_prompt(cmd), system=system_prompt, google_search=1, code_execution=1)
+                        response = conversation.prompt(build_prompt(cmd), system=sysprompt, google_search=1, code_execution=1)
                     else:
-                        response = conversation.prompt(build_prompt(cmd), system=system_prompt)
+                        response = conversation.prompt(build_prompt(cmd), system=sysprompt)
                     response_text = response.text()
                     response_usage = response.usage()
                 console.print(Markdown(response_text))
@@ -106,7 +110,10 @@ parser = argparse.ArgumentParser(description='SRE assistant that reads commands 
 parser.add_argument('--fifo', '-f', type=str, help='Path to FIFO file (will be created if it does not exist)')
 parser.add_argument('--sop', '-s', action='append', type=argparse.FileType('r', encoding='UTF-8'), help="Path to a local copy of an SOP to add to the LLM's context window")
 parser.add_argument('--verbose', '-v', action='store_true', help="Verbose output (including LLM token usage)")
-parser.add_argument('--model', '-m', type=str, default='gemini-2.5-pro', help='LLM to use')
+parser.add_argument('--model', '-m', type=str, default='gemini-2.5-pro', help='LLM to use (default: gemini-2.5-pro)')
+parser.add_argument('--sysprompt-only-once', '-p', action='store_true', default=False,
+                    help="only provide the system prompt during LLM initialization — helpful for models with small context windows (default: provide sysprompt with each request)")
+
 args = parser.parse_args()
 
 # Create a FIFO
@@ -146,7 +153,7 @@ with console.status("Initializing LLM..."):
         console.print(init_response.usage(), style="dim italic")
 
 # Start the main chat loop
-main(conversation, fifo_path)
+main(conversation, fifo_path, args.sysprompt_only_once)
 
 # Clean up the FIFO and temporary directory after main completes
 try:
