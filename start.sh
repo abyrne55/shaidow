@@ -1,6 +1,6 @@
 #!/bin/bash
 # Shaidow tmux startup script
-# Creates a tmux session with shell.sh on the left and shaidow.py on the right,
+# Creates a tmux session with a script2json-recorded shell on the left and shaidow.py on the right,
 # connected via a secure FIFO
 # Generated-by: Claude 4 Sonnet
 
@@ -9,7 +9,7 @@ set -eo pipefail
 # Function to display usage
 usage() {
     echo "Usage: $0 [OPTIONS]"
-    echo "Creates a tmux session with shell.sh (left) and shaidow.py (right) connected via FIFO"
+    echo "Creates a tmux session with a shell recorded by script2json(left) and shaidow.py (right) connected via FIFO"
     echo ""
     echo "All options are passed through to shaidow.py, except:"
     echo "  -h, --help    Show this help message"
@@ -43,10 +43,12 @@ fi
 # Set secure permissions (only owner can read/write/execute)
 chmod 700 "$TEMP_DIR"
 
-# Create FIFO with secure permissions
-FIFO_PATH="$TEMP_DIR/fifo"
-mkfifo "$FIFO_PATH"
-chmod 600 "$FIFO_PATH"  # Only owner can read/write
+# Create FIFOs with secure permissions
+SCRIPT_FIFO_PATH="$TEMP_DIR/script.fifo"
+COMMAND_FIFO_PATH="$TEMP_DIR/command.fifo"
+SHAIDOW_FIFO_PATH="$TEMP_DIR/shaidow.fifo"
+mkfifo "$SCRIPT_FIFO_PATH" "$COMMAND_FIFO_PATH" "$SHAIDOW_FIFO_PATH"
+chmod 600 "$SCRIPT_FIFO_PATH" "$COMMAND_FIFO_PATH" "$SHAIDOW_FIFO_PATH"  # Only owner can read/write
 
 
 # Function to cleanup on exit
@@ -55,15 +57,17 @@ cleanup() {
     tmux has-session -t "$SESSION_NAME" 2>/dev/null && tmux kill-session -t "$SESSION_NAME"
     
     # Clean up FIFO and temp directory
-    [[ -p "$FIFO_PATH" ]] && rm -f "$FIFO_PATH"
-    [[ -d "$TEMP_DIR" ]] && rmdir "$TEMP_DIR" 2>/dev/null
+    [[ -p "$SCRIPT_FIFO_PATH" ]] && rm -f "$SCRIPT_FIFO_PATH"
+    [[ -p "$COMMAND_FIFO_PATH" ]] && rm -f "$COMMAND_FIFO_PATH"
+    [[ -p "$SHAIDOW_FIFO_PATH" ]] && rm -f "$SHAIDOW_FIFO_PATH"
+    [[ -d "$TEMP_DIR" ]] && rmdir "$TEMP_DIR"
 }
 
 # Set trap for cleanup
 trap cleanup EXIT INT TERM
 
 # Get the absolute path to the script directory
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SHAIDOW_SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Check if for required dependencies
 if ! command -v tmux &> /dev/null; then
@@ -81,9 +85,14 @@ if ! command -v script &> /dev/null; then
     echo "Please install script: sudo dnf install script (Fedora/RHEL) or brew install script (macOS)"
     exit 1
 fi
+if ! command -v script2json &> /dev/null; then
+    echo "Error: script2json is required but not installed."
+    echo "Please install script2json: git clone https://github.com/abyrne55/script2json.git && cd script2json && go build && go install"
+    exit 1
+fi
 if ! command -v llm &> /dev/null; then
     echo "Error: llm is required but not installed. If you are using a virtual environment, make sure it is activated."
-    echo "Otherwise, please install all required Python packages: pip3 install -r $SCRIPT_DIR/requirements.txt"
+    echo "Otherwise, please install all required Python packages: pip3 install -r $SHAIDOW_SRC_DIR/requirements.txt"
     exit 1
 fi
 
@@ -100,26 +109,25 @@ if ! [[ $(llm keys list) ]] && [[ "$SKIP_KEY_CHECK" != "1" ]]; then
 fi
 
 # Check if required files exist
-if [[ ! -f "$SCRIPT_DIR/shell.sh" ]]; then
-    echo "Error: shell.sh not found in $SCRIPT_DIR"
+if [[ ! -f "$SHAIDOW_SRC_DIR/shaidow.py" ]]; then
+    echo "Error: shaidow.py not found in $SHAIDOW_SRC_DIR"
     exit 1
 fi
 
-if [[ ! -f "$SCRIPT_DIR/shaidow.py" ]]; then
-    echo "Error: shaidow.py not found in $SCRIPT_DIR"
-    exit 1
-fi
+echo "Starting script2json (TODO remove tee to log file)..."
+script2json -log-level error -script-fifo "$SCRIPT_FIFO_PATH" -command-fifo "$COMMAND_FIFO_PATH" | tee $SHAIDOW_FIFO_PATH >/tmp/script2json.log 2>&1 &
 
-# Make sure shell.sh is executable
-chmod +x "$SCRIPT_DIR/shell.sh"
+echo "Starting Shaidow tmux session ($SESSION_NAME via $TEMP_DIR)..."
 
-echo "Starting Shaidow tmux session ($SESSION_NAME via $FIFO_PATH)..."
+# Create a new tmux session with recorded shell session running in the first pane
+tmux new-session -d -s "$SESSION_NAME" -c "$HOME" "script -qf $SCRIPT_FIFO_PATH"
 
-# Create a new tmux session with shell.sh running in the first pane
-tmux new-session -d -s "$SESSION_NAME" -c "$SCRIPT_DIR" "$SCRIPT_DIR/shell.sh" "$FIFO_PATH"
+# Initialize recorded shell with a simpler variable assignment
+INIT_SHELL_CMD="PROMPT_COMMAND='echo \"\$(fc -ln -1 2>/dev/null | sed \"s/^[[:space:]]*//\")\" > $COMMAND_FIFO_PATH 2>/dev/null; pkill -USR2 script2json 2>/dev/null; ' ; trap '[[ ! \"\$BASH_COMMAND\" =~ pkill\\ -USR[1-2]+\\ script2json ]] && { pkill -USR1 script2json 2>/dev/null; }' DEBUG"
+tmux send-keys -t "$SESSION_NAME:0.0" "$INIT_SHELL_CMD" Enter
 
 # Split the window vertically and run shaidow.py in the right pane
-tmux split-window -h -t "$SESSION_NAME:0" -c "$SCRIPT_DIR" "python3 $SCRIPT_DIR/shaidow.py --fifo '$FIFO_PATH' $*"
+tmux split-window -h -t "$SESSION_NAME:0" -c "$SHAIDOW_SRC_DIR" "python3 $SHAIDOW_SRC_DIR/shaidow.py --fifo '$SHAIDOW_FIFO_PATH' $*"
 
 # Disable the status bar
 tmux set-option -t "$SESSION_NAME" status off
