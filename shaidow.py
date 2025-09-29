@@ -71,7 +71,11 @@ def main(conversation: llm.Conversation, fifo_path: str):
             except (json.JSONDecodeError, KeyError) as e:
                 console.print(f"Error parsing JSON: {e}")
                 continue
-                
+
+            # Skip the initial PROMPT_COMMAND setting
+            if cmd.command.startswith("PROMPT_COMMAND"):
+                continue
+
             try:
                 header = Text.assemble(
                     (escape(f"[{cmd.id}]"), "dim bold"),
