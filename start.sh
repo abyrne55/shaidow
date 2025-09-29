@@ -44,6 +44,7 @@ fi
 chmod 700 "$TEMP_DIR"
 
 # Create FIFOs with secure permissions
+SCRIPT2JSON_PID_FILE="$TEMP_DIR/script2json.pid"
 SCRIPT_FIFO_PATH="$TEMP_DIR/script.fifo"
 COMMAND_FIFO_PATH="$TEMP_DIR/command.fifo"
 SHAIDOW_FIFO_PATH="$TEMP_DIR/shaidow.fifo"
@@ -56,10 +57,12 @@ cleanup() {
     # Kill the tmux session if it exists
     tmux has-session -t "$SESSION_NAME" 2>/dev/null && tmux kill-session -t "$SESSION_NAME"
     
-    # Clean up FIFO and temp directory
+    # Clean up temp files and kill script2json
     [[ -p "$SCRIPT_FIFO_PATH" ]] && rm -f "$SCRIPT_FIFO_PATH"
     [[ -p "$COMMAND_FIFO_PATH" ]] && rm -f "$COMMAND_FIFO_PATH"
     [[ -p "$SHAIDOW_FIFO_PATH" ]] && rm -f "$SHAIDOW_FIFO_PATH"
+    [[ -s "$SCRIPT2JSON_PID_FILE" ]] && kill $(cat "$SCRIPT2JSON_PID_FILE")
+    [[ -f "$SCRIPT2JSON_PID_FILE" ]] && rm -f "$SCRIPT2JSON_PID_FILE"
     [[ -d "$TEMP_DIR" ]] && rmdir "$TEMP_DIR"
 }
 
@@ -115,7 +118,7 @@ if [[ ! -f "$SHAIDOW_SRC_DIR/shaidow.py" ]]; then
 fi
 
 echo "Starting script2json (TODO remove tee to log file)..."
-script2json -log-level error -script-fifo "$SCRIPT_FIFO_PATH" -command-fifo "$COMMAND_FIFO_PATH" | tee $SHAIDOW_FIFO_PATH >/tmp/script2json.log 2>&1 &
+script2json -log-level error -pid-file "$SCRIPT2JSON_PID_FILE" -script-fifo "$SCRIPT_FIFO_PATH" -command-fifo "$COMMAND_FIFO_PATH" | tee $SHAIDOW_FIFO_PATH >/tmp/script2json.log 2>&1 &
 
 echo "Starting Shaidow tmux session ($SESSION_NAME via $TEMP_DIR)..."
 
@@ -123,7 +126,8 @@ echo "Starting Shaidow tmux session ($SESSION_NAME via $TEMP_DIR)..."
 tmux new-session -d -s "$SESSION_NAME" -c "$HOME" "script -qf $SCRIPT_FIFO_PATH"
 
 # Initialize recorded shell with a simpler variable assignment
-INIT_SHELL_CMD="PROMPT_COMMAND='echo \"\$(fc -ln -1 2>/dev/null | sed \"s/^[[:space:]]*//\")\" > $COMMAND_FIFO_PATH 2>/dev/null; pkill -USR2 script2json 2>/dev/null; ' ; trap '[[ ! \"\$BASH_COMMAND\" =~ pkill\\ -USR[1-2]+\\ script2json ]] && { pkill -USR1 script2json 2>/dev/null; }' DEBUG"
+S2J_PID=$(cat "$SCRIPT2JSON_PID_FILE")
+INIT_SHELL_CMD="PROMPT_COMMAND='echo \"\$(fc -ln -1 2>/dev/null | sed \"s/^[[:space:]]*//\")\" > $COMMAND_FIFO_PATH 2>/dev/null; kill -USR2 $S2J_PID 2>/dev/null; ' ; trap '[[ ! \"\$BASH_COMMAND\" =~ kill\\ -USR[1-2]+\\ $S2J_PID ]] && { kill -USR1 $S2J_PID 2>/dev/null; }' DEBUG"
 tmux send-keys -t "$SESSION_NAME:0.0" "$INIT_SHELL_CMD" Enter
 
 # Split the window vertically and run shaidow.py in the right pane
