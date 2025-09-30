@@ -30,6 +30,12 @@ for arg in "$@"; do
     fi
 done
 
+# Quit if already in a tmux session
+if [[ -n "$TMUX" ]]; then
+    echo "Error: existing tmux/byobu session detected. Please start Shaidow in a new terminal window or run 'unset TMUX' to override."
+    exit 1
+fi
+
 # Generate a unique session name
 SESSION_NAME="shaidow_$(date +%s)_$$"
 
