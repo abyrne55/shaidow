@@ -72,6 +72,15 @@ trap cleanup EXIT INT TERM
 # Get the absolute path to the script directory
 SHAIDOW_SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# If llm is missing and the virtual environment is not activated, ask user if they want to activate it
+if ! command -v llm &> /dev/null && ! [[ "$VIRTUAL_ENV" ]]; then
+    read -p "Virtual environment not activated. Would you like to activate it? (y/n) " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        source $SHAIDOW_SRC_DIR/.venv/bin/activate
+    fi
+fi
+
 # Check if for required dependencies
 if ! command -v tmux &> /dev/null; then
     echo "Error: tmux is required but not installed"
@@ -94,8 +103,8 @@ if ! command -v script2json &> /dev/null; then
     exit 1
 fi
 if ! command -v llm &> /dev/null; then
-    echo "Error: llm is required but not installed. If you are using a virtual environment, make sure it is activated."
-    echo "Otherwise, please install all required Python packages: pip3 install -r $SHAIDOW_SRC_DIR/requirements.txt"
+    echo "Error: llm is required but not installed"
+    echo "Please install all required Python packages: pip3 install -r $SHAIDOW_SRC_DIR/requirements.txt"
     exit 1
 fi
 
