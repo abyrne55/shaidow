@@ -72,8 +72,8 @@ def main(conversation: llm.Conversation, fifo_path: str, sysprompt_only_once: bo
                 console.print(f"Error parsing JSON: {e}")
                 continue
 
-            # Skip the initial PROMPT_COMMAND setting
-            if cmd.command.startswith("PROMPT_COMMAND"):
+            # Skip the initial PROMPT_COMMAND setting or commands ending with #i
+            if cmd.command.startswith("PROMPT_COMMAND") or cmd.command.endswith("#i"):
                 continue
 
             try:
