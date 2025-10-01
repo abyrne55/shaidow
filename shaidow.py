@@ -1,8 +1,11 @@
 import json
+import time
 import llm
 import os
 import tempfile
 import argparse
+import subprocess
+from datetime import datetime
 from rich import print
 from rich.console import Console
 from rich.markup import escape
@@ -27,24 +30,45 @@ Use Markdown formatting where appropriate. Use emoji sparingly.
 """
 console = Console(theme=Theme({"markdown.code": "bold green on gray93", "markdown.code_block": "green on gray93"}))
 
+# Borrowed from https://rich.readthedocs.io/en/latest/_modules/rich/markdown.html#Markdown
+def flatten_markdown_tokens(tokens):
+    """Flattens the token stream."""
+    for token in tokens:
+        is_fence = token.type == "fence"
+        is_image = token.tag == "img"
+        if token.children and not (is_image or is_fence):
+            yield from flatten_markdown_tokens(token.children)
+        else:
+            yield token
+
 class Command:
-    def __init__(self, id, command, output):
+    def __init__(self, id, command, output, return_timestamp):
         self.id = id
         self.command = command
         self.output = output
+        self.return_timestamp = return_timestamp
 
     @classmethod
     def from_json(cls, json_str):
         data = json.loads(json_str)
+        
+        # Parse return_timestamp from ISO8601 format
+        timestamp_value = data.get("return_timestamp")
+        if timestamp_value:
+            return_timestamp = datetime.fromisoformat(timestamp_value.replace('Z', '+00:00'))
+        else:
+            return_timestamp = None
+            
         return cls(
             id=data.get("id"),
             command=data.get("command"),
-            output=data.get("output")
+            output=data.get("output"),
+            return_timestamp=return_timestamp
         )
 
 def build_prompt(cmd: Command):
     # Forward shell comments directly to the LLM
-    if cmd.command.startswith("#"):
+    if cmd.command.strip().startswith("#"):
         return cmd.command
     
     return f"""
@@ -56,10 +80,12 @@ def build_prompt(cmd: Command):
     ```
     {cmd.output}
     ```
+    The command finished executing at {cmd.return_timestamp.isoformat(timespec='seconds')}
     """
 
-def main(conversation: llm.Conversation, fifo_path: str, sysprompt_only_once: bool):
+def main(conversation: llm.Conversation, fifo_path: str, sysprompt_only_once: bool, tmux_shell_pane: str = None):
     with open(fifo_path, 'r') as fifo:
+        last_suggested_command = ""
         while True:
             line = fifo.readline()
             if not line:  # EOF, writer closed
@@ -74,6 +100,19 @@ def main(conversation: llm.Conversation, fifo_path: str, sysprompt_only_once: bo
 
             # Skip the initial PROMPT_COMMAND setting or commands ending with #i
             if cmd.command.startswith("PROMPT_COMMAND") or cmd.command.endswith("#i"):
+                continue
+
+            if cmd.command.strip() == ("##"):
+                if tmux_shell_pane and last_suggested_command:
+                    try:
+                        # Need to wait a little to allow shell prompt to print
+                        time.sleep(0.4)
+                        subprocess.run(
+                            ["tmux", "send-keys", "-t", tmux_shell_pane, last_suggested_command],
+                            check=True
+                        )
+                    except Exception as e:
+                        console.print(f"Error sending keys to tmux pane: {e}", style="red")
                 continue
 
             try:
@@ -98,7 +137,12 @@ def main(conversation: llm.Conversation, fifo_path: str, sysprompt_only_once: bo
                         response = conversation.prompt(build_prompt(cmd), system=sysprompt)
                     response_text = response.text()
                     response_usage = response.usage()
-                console.print(Markdown(response_text))
+                md = Markdown(response_text)
+                console.print(md)
+                #print(f"md.parsed: {md.parsed}")
+                code_blocks = [token.content.strip() for token in flatten_markdown_tokens(md.parsed) if token.type == "fence" and token.tag == "code"]
+                if code_blocks:
+                    last_suggested_command = code_blocks[-1]
                 if args.verbose:
                     console.print(response_usage, style="dim italic")
             except Exception as e:
@@ -113,6 +157,8 @@ parser.add_argument('--verbose', '-v', action='store_true', help="Verbose output
 parser.add_argument('--model', '-m', type=str, default='gemini-2.5-pro', help='LLM to use (default: gemini-2.5-pro)')
 parser.add_argument('--sysprompt-only-once', '-p', action='store_true', default=False,
                     help="only provide the system prompt during LLM initialization — helpful for models with small context windows (default: provide sysprompt with each request)")
+parser.add_argument('--tmux-shell-pane', '-t', type=str, help='ID of the tmux pane containing the shell being recorded')
+
 
 args = parser.parse_args()
 
@@ -153,7 +199,7 @@ with console.status("Initializing LLM..."):
         console.print(init_response.usage(), style="dim italic")
 
 # Start the main chat loop
-main(conversation, fifo_path, args.sysprompt_only_once)
+main(conversation, fifo_path, args.sysprompt_only_once, args.tmux_shell_pane)
 
 # Clean up the FIFO and temporary directory after main completes
 try:

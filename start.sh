@@ -142,11 +142,12 @@ tmux new-session -d -s "$SESSION_NAME" -c "$HOME" "script -qf $SCRIPT_FIFO_PATH"
 
 # Initialize recorded shell with a simpler variable assignment
 S2J_PID=$(cat "$SCRIPT2JSON_PID_FILE")
+TMUX_SHELL_PANE_ID="$SESSION_NAME:0.0"
 INIT_SHELL_CMD="PROMPT_COMMAND='echo \"\$(fc -ln -1 2>/dev/null | sed \"s/^[[:space:]]*//\")\" > $COMMAND_FIFO_PATH 2>/dev/null; kill -USR2 $S2J_PID 2>/dev/null; ' ; trap '[[ ! \"\$BASH_COMMAND\" =~ kill\\ -USR[1-2]+\\ $S2J_PID ]] && { kill -USR1 $S2J_PID 2>/dev/null; }' DEBUG"
-tmux send-keys -t "$SESSION_NAME:0.0" "$INIT_SHELL_CMD" Enter
+tmux send-keys -t "$TMUX_SHELL_PANE_ID" "$INIT_SHELL_CMD" Enter
 
 # Split the window vertically and run shaidow.py in the right pane
-tmux split-window -h -t "$SESSION_NAME:0" -c "$SHAIDOW_SRC_DIR" "python3 $SHAIDOW_SRC_DIR/shaidow.py --fifo '$SHAIDOW_FIFO_PATH' $*"
+tmux split-window -h -t "$SESSION_NAME:0" -c "$SHAIDOW_SRC_DIR" "python3 $SHAIDOW_SRC_DIR/shaidow.py --fifo '$SHAIDOW_FIFO_PATH' --tmux-shell-pane '$TMUX_SHELL_PANE_ID' $*"
 
 # Disable the status bar
 tmux set-option -t "$SESSION_NAME" status off
