@@ -93,11 +93,6 @@ if ! command -v tmux &> /dev/null; then
     echo "Please install tmux: sudo dnf install tmux (Fedora/RHEL) or brew install tmux (macOS)"
     exit 1
 fi
-if ! command -v jq &> /dev/null; then
-    echo "Error: jq is required but not installed."
-    echo "Please install jq: sudo dnf install jq (Fedora/RHEL) or brew install jq (macOS)"
-    exit 1
-fi
 if ! command -v script &> /dev/null; then
     echo "Error: script is required but not installed."
     echo "Please install script: sudo dnf install script (Fedora/RHEL) or brew install script (macOS)"
