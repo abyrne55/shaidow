@@ -12,6 +12,7 @@ from rich.markup import escape
 from rich.markdown import Markdown
 from rich.text import Text
 from rich.theme import Theme
+from tools import knowledgebase
 
 system_prompt = """
 You are a helpful (and sometimes playful) assistant to a site reliability engineer (SRE) investigating alerts and other problems with OpenShift 4 clusters.
@@ -155,11 +156,14 @@ def main(conversation: llm.Conversation, fifo_path: str, sysprompt_only_once: bo
                     sysprompt = system_prompt
                 with console.status("Thinking..."):
                     if "gemini" in conversation.model.model_id.lower():
-                        response = conversation.prompt(build_prompt(cmd), system=sysprompt, google_search=1, code_execution=1)
+                        response = conversation.chain(build_prompt(cmd), system=sysprompt)#, google_search=1, code_execution=1)
                     else:
-                        response = conversation.prompt(build_prompt(cmd), system=sysprompt)
+                        response = conversation.chain(build_prompt(cmd), system=sysprompt)
                     response_text = response.text()
-                    response_usage = response.usage()
+                    response_usage = list(r.usage() for r in response.responses())
+                    # if response.tool_calls:
+                    #     console.print(f"Tool calls: {response.tool_calls}\nResults: {response.execute_tool_calls()}", style="dim italic")
+                        
                 response_md = Markdown(response_text)
                 console.print(response_md)
                 record_suggested_command(response_md)
@@ -200,7 +204,7 @@ if args.verbose:
 
 # Configure the model
 model = llm.get_model(args.model)
-conversation = model.conversation()
+conversation = model.conversation(tools=[knowledgebase.search])
 
 # Read any SOPs
 sops = []
