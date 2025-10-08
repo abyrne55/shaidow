@@ -12,13 +12,13 @@ from rich.markup import escape
 from rich.markdown import Markdown
 from rich.text import Text
 from rich.theme import Theme
-from tools import knowledgebase
+from tools.knowledgebase import KnowledgeBase
 
 system_prompt = """
 You are a helpful (and sometimes playful) assistant to a site reliability engineer (SRE) investigating alerts and other problems with OpenShift 4 clusters.
 You will be shown the output of shell commands the SRE uses during their investigation.
 Your job is to point out any interesting or important information in the output that the SRE may have missed.
-You may also suggest a command to run if you think it will help investigate the problem further. Use Markdown shell code block formatting for commands longer than 10 characters.
+You may also suggest a command to run if you think it will help investigate the prsoblem further. Use Markdown shell code block formatting for commands longer than 10 characters.
 Once per conversation at most, you may concisely remind the SRE that you will ignore any commands that end with `#i`.
 Avoid suggesting full-screen interactive commands like 'watch' or 'top', as you probably won't be able to see the output of that command. If you must suggest an interactive command, suffix it with `#i`.
 The SRE may send you messages directly via shell comments starting with `#`. Respond to these messages as if the SRE is speaking to you directly.
@@ -29,6 +29,7 @@ If you are not confident that you can meaningfully comment on specific output, d
 The SRE may not always follow your advice. Defer to the SRE's judgement. If the SRE appears to want to go down a different investigation path, do not try to dissuade them.
 You may be provided with one or more standard operating procedures (SOPs) written in Markdown format. These may inform your responses but should not be treated as gospel. 
 If SOPs are provided, make note of any actions the SRE takes that may indicate the SOP needs revision/updating. Offer to help the SRE update SOPs near the end of the investigation.
+Make frequent use of the knowledgebase search tool to inform your responses. The SRE may refer to the knowledgebase as "ops-sop".
 Keep your responses very concise, i.e., less than 19 words on average, excluding suggested commands). Avoid redundant phrases like "Please share the output" or "I see that you ran that command."
 Use Markdown formatting where appropriate. Use emoji sparingly.
 """
@@ -124,9 +125,8 @@ def main(conversation: llm.Conversation, fifo_path: str, sysprompt_only_once: bo
                         command_index = num_hashes - 2  # ## maps to index -1 (last), ### to index -2, etc.
                         
                         if command_index < len(suggested_commands):
-                            # Get command from the end of the list (most recent first)
-                            command_to_send = suggested_commands[-(command_index + 1)]
-                            
+                            # Get newline-scrubbed command from the end of the list (most recent first)
+                            command_to_send = suggested_commands[-(command_index + 1)].replace('\n', '; ')
                             # Need to wait a little to allow shell prompt to print
                             time.sleep(0.4)
                             subprocess.run(
@@ -154,15 +154,17 @@ def main(conversation: llm.Conversation, fifo_path: str, sysprompt_only_once: bo
                     sysprompt = None
                 else:
                     sysprompt = system_prompt
-                with console.status("Thinking..."):
-                    if "gemini" in conversation.model.model_id.lower():
-                        response = conversation.chain(build_prompt(cmd), system=sysprompt)#, google_search=1, code_execution=1)
-                    else:
-                        response = conversation.chain(build_prompt(cmd), system=sysprompt)
+                with console.status("Thinking...") as status:
+                    def before_call(tool: llm.Tool, tool_call: llm.ToolCall):
+                        status.update(f"Searching knowledgebase for '{tool_call.arguments['query']}'...", spinner="dots10")
+                    def after_call(tool: llm.Tool, tool_call: llm.ToolCall, tool_result: llm.ToolResult):
+                        status.update(f"Reading through {len(json.loads(tool_result.output))} articles regarding '{tool_call.arguments['query']}'...", spinner="dots4")
+                        if args.verbose:
+                            console.print(f"Tool {tool.name} called with arguments {tool_call.arguments} returned {tool_result.output}")
+                    response = conversation.chain(build_prompt(cmd), system=sysprompt, before_call=before_call, after_call=after_call)
+
                     response_text = response.text()
                     response_usage = list(r.usage() for r in response.responses())
-                    # if response.tool_calls:
-                    #     console.print(f"Tool calls: {response.tool_calls}\nResults: {response.execute_tool_calls()}", style="dim italic")
                         
                 response_md = Markdown(response_text)
                 console.print(response_md)
@@ -182,7 +184,8 @@ parser.add_argument('--model', '-m', type=str, default='gemini-2.5-pro', help='L
 parser.add_argument('--sysprompt-only-once', '-p', action='store_true', default=False,
                     help="only provide the system prompt during LLM initialization — helpful for models with small context windows (default: provide sysprompt with each request)")
 parser.add_argument('--tmux-shell-pane', '-t', type=str, help='ID of the tmux pane containing the shell being recorded')
-
+parser.add_argument('--kb-collection', '-k', type=str, default='ops-sop', help='Name of the knowledgebase collection to use (default: ops-sop)')
+parser.add_argument('--kb-database', '-d', type=str, help='Path to the SQLite database containing the knowledgebase collection (default: llm\'s default embeddings database)')
 
 args = parser.parse_args()
 
@@ -202,9 +205,18 @@ else:
 if args.verbose:
     print(f"Pipe your shell into {fifo_path}")
 
+# Attempt to load the knowledgebase tool
+knowledgebase = None
+llm_tools = []
+try:
+    knowledgebase = KnowledgeBase(args.kb_collection, args.kb_database)
+    llm_tools.append(knowledgebase.search)
+except llm.embeddings.Collection.DoesNotExist:
+    print(f"⚠️ No knowledgebase called {args.kb_collection} found within {args.kb_database if args.kb_database else 'llm\'s default embeddings database'}")
+
 # Configure the model
 model = llm.get_model(args.model)
-conversation = model.conversation(tools=[knowledgebase.search])
+conversation = model.conversation(tools=llm_tools)
 
 # Read any SOPs
 sops = []
