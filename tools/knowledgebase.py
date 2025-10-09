@@ -20,7 +20,7 @@ class KnowledgeBase:
         self.database: Database = Database(database_path) if database_path else Database(user_dir() / "embeddings.db")
         self.collection: llm.Collection = llm.Collection(collection_name, self.database, create=False)
 
-    def search(self, query: str, max_results: int = 5) -> list[str]:
+    def knowledgebase_search(self, query: str, max_results: int = 5) -> list[str]:
         """
         Search the knowledgebase for documents relevant to the query
         """

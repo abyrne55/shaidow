@@ -13,6 +13,7 @@ from rich.markdown import Markdown
 from rich.text import Text
 from rich.theme import Theme
 from tools.knowledgebase import KnowledgeBase
+from tools.web import WebSearch
 
 system_prompt = """
 You are a helpful (and sometimes playful) assistant to a site reliability engineer (SRE) investigating alerts and other problems with OpenShift 4 clusters.
@@ -29,7 +30,7 @@ If you are not confident that you can meaningfully comment on specific output, d
 The SRE may not always follow your advice. Defer to the SRE's judgement. If the SRE appears to want to go down a different investigation path, do not try to dissuade them.
 You may be provided with one or more standard operating procedures (SOPs) written in Markdown format. These may inform your responses but should not be treated as gospel. 
 If SOPs are provided, make note of any actions the SRE takes that may indicate the SOP needs revision/updating. Offer to help the SRE update SOPs near the end of the investigation.
-Make frequent use of the knowledgebase search tool to inform your responses. The SRE may refer to the knowledgebase as "ops-sop".
+Make frequent use of the knowledgebase and web search tools to inform your responses. The SRE may refer to the knowledgebase as "ops-sop".
 Keep your responses very concise, i.e., less than 19 words on average, excluding suggested commands). Avoid redundant phrases like "Please share the output" or "I see that you ran that command."
 Use Markdown formatting where appropriate. Use emoji sparingly.
 """
@@ -156,9 +157,17 @@ def main(conversation: llm.Conversation, fifo_path: str, sysprompt_only_once: bo
                     sysprompt = system_prompt
                 with console.status("Thinking...") as status:
                     def before_call(tool: llm.Tool, tool_call: llm.ToolCall):
-                        status.update(f"Searching knowledgebase for '{tool_call.arguments['query']}'...", spinner="dots10")
+                        query = tool_call.arguments.get('query', '')
+                        if tool.name == 'knowledgebase_search':
+                            status.update(f"Searching knowledgebase for '{query}'...", spinner="dots10")
+                        elif tool.name == 'web_search':
+                            status.update(f"Searching web for '{query}'...", spinner="earth")
                     def after_call(tool: llm.Tool, tool_call: llm.ToolCall, tool_result: llm.ToolResult):
-                        status.update(f"Reading through {len(json.loads(tool_result.output))} articles regarding '{tool_call.arguments['query']}'...", spinner="dots4")
+                        query = tool_call.arguments.get('query', '')
+                        if tool.name == 'knowledgebase_search':
+                            status.update(f"Reading through {len(json.loads(tool_result.output))} articles regarding '{query}'...", spinner="dots4")
+                        elif tool.name == 'web_search':
+                            status.update(f"Reading through {len(json.loads(tool_result.output))} web results for '{query}'...", spinner="dots4")
                         if args.verbose:
                             console.print(f"Tool {tool.name} called with arguments {tool_call.arguments} returned {tool_result.output}")
                     response = conversation.chain(build_prompt(cmd), system=sysprompt, before_call=before_call, after_call=after_call)
@@ -207,12 +216,17 @@ if args.verbose:
 
 # Attempt to load the knowledgebase tool
 knowledgebase = None
+websearch = None
 llm_tools = []
 try:
     knowledgebase = KnowledgeBase(args.kb_collection, args.kb_database)
-    llm_tools.append(knowledgebase.search)
+    llm_tools.append(knowledgebase.knowledgebase_search)
 except llm.embeddings.Collection.DoesNotExist:
     print(f"⚠️ No knowledgebase called {args.kb_collection} found within {args.kb_database if args.kb_database else 'llm\'s default embeddings database'}")
+
+# Load the web search tool
+websearch = WebSearch()
+llm_tools.append(websearch.web_search)
 
 # Configure the model
 model = llm.get_model(args.model)
