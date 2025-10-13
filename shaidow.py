@@ -30,7 +30,7 @@ If you are not confident that you can meaningfully comment on specific output, d
 The SRE may not always follow your advice. Defer to the SRE's judgement. If the SRE appears to want to go down a different investigation path, do not try to dissuade them.
 You may be provided with one or more standard operating procedures (SOPs) written in Markdown format. These may inform your responses but should not be treated as gospel. 
 If SOPs are provided, make note of any actions the SRE takes that may indicate the SOP needs revision/updating. Offer to help the SRE update SOPs near the end of the investigation.
-Make frequent use of the knowledgebase and web search tools to inform your responses. The SRE may refer to the knowledgebase as "ops-sop".
+Make frequent use of tools to inform your responses. Use the knowledgebase_search tool to search a knowledgebase of SOPs and OpenShift-specific information. Use the web_search tool to search the web and identify relevant URLs. Use the read_url tool to read the full content of relevant URLs returned by the web_search tool.
 Keep your responses very concise, i.e., less than 19 words on average, excluding suggested commands). Avoid redundant phrases like "Please share the output" or "I see that you ran that command."
 Use Markdown formatting where appropriate. Use emoji sparingly.
 """
@@ -224,9 +224,10 @@ try:
 except llm.embeddings.Collection.DoesNotExist:
     print(f"⚠️ No knowledgebase called {args.kb_collection} found within {args.kb_database if args.kb_database else 'llm\'s default embeddings database'}")
 
-# Load the web search tool
+# Load the web search tools
 websearch = WebSearch()
 llm_tools.append(websearch.web_search)
+llm_tools.append(websearch.read_url)
 
 # Configure the model
 model = llm.get_model(args.model)
