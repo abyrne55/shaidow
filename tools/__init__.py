@@ -34,6 +34,11 @@ _tool_registry = {
         'after_status': "Reading through {result_count} articles regarding '{query}'...",
         'spinner': "dots10"
     },
+    'KnowledgeBase_read_id': {
+        'during_status': "Fetching '{id}' from the knowledgebase...",
+        'after_status': "Reading knowledgebase article '{id}'...",
+        'spinner': "dots10"
+    },
     'Web_search': {
         'during_status': "Searching web for '{query}'...",
         'after_status': "Skimming through {result_count} web results for '{query}'...",

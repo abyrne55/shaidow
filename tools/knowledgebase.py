@@ -29,3 +29,16 @@ class KnowledgeBase(Toolbox):
         most_relevant_score = all_results[0].score
         relevant_results = [result for result in all_results if result.score >= most_relevant_score - 0.04]
         return list({'id':entry.id, 'relevance_score':entry.score, 'content':entry.content} for entry in relevant_results)
+
+    def read_id(self, id: str) -> str:
+        """
+        Read the content of a document by its ID
+        """
+        matches = list(
+            self.database["embeddings"].rows_where(
+                "collection_id = ? and id = ?", (self.collection.id, id)
+            )
+        )
+        if not matches:
+            raise self.DoesNotExist("ID not found")
+        return matches[0]["content"]
