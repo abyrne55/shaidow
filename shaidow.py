@@ -13,7 +13,9 @@ from rich.markdown import Markdown
 from rich.text import Text
 from rich.theme import Theme
 from tools.knowledgebase import KnowledgeBase
-from tools.web import WebSearch
+from tools.web import Web
+from tools.clock import Clock
+from tools import during_call_status_message, after_call_status_message, spinner
 
 system_prompt = """
 You are a helpful (and sometimes playful) assistant to a site reliability engineer (SRE) investigating alerts and other problems with OpenShift 4 clusters.
@@ -31,7 +33,7 @@ The SRE may not always follow your advice. Defer to the SRE's judgement. If the 
 You may be provided with one or more standard operating procedures (SOPs) written in Markdown format. These may inform your responses but should not be treated as gospel. 
 If SOPs are provided, make note of any actions the SRE takes that may indicate the SOP needs revision/updating. Offer to help the SRE update SOPs near the end of the investigation.
 Make frequent use of tools to inform your responses. Use the knowledgebase_search tool to search a knowledgebase of SOPs and OpenShift-specific information. Use the web_search tool to search the web and identify relevant URLs. Use the read_url tool to read the full content of relevant URLs returned by the web_search tool.
-Keep your responses very concise, i.e., less than 19 words on average, excluding suggested commands). Avoid redundant phrases like "Please share the output" or "I see that you ran that command."
+Keep your responses very concise, i.e., less than 19 words on average, excluding suggested commands. Don't comment until you've finished any necessary tool calls. Avoid redundant phrases like "Please share the output", "I see that you ran that command", and "I'm going to try another tool."
 Use Markdown formatting where appropriate. Use emoji sparingly.
 """
 console = Console(theme=Theme({"markdown.code": "bold green on gray93", "markdown.code_block": "green on gray93"}))
@@ -157,19 +159,13 @@ def main(conversation: llm.Conversation, fifo_path: str, sysprompt_only_once: bo
                     sysprompt = system_prompt
                 with console.status("Thinking...") as status:
                     def before_call(tool: llm.Tool, tool_call: llm.ToolCall):
-                        query = tool_call.arguments.get('query', '')
-                        if tool.name == 'knowledgebase_search':
-                            status.update(f"Searching knowledgebase for '{query}'...", spinner="dots10")
-                        elif tool.name == 'web_search':
-                            status.update(f"Searching web for '{query}'...", spinner="earth")
+                        status.update(during_call_status_message(tool, tool_call), spinner=spinner(tool))
+                    
                     def after_call(tool: llm.Tool, tool_call: llm.ToolCall, tool_result: llm.ToolResult):
-                        query = tool_call.arguments.get('query', '')
-                        if tool.name == 'knowledgebase_search':
-                            status.update(f"Reading through {len(json.loads(tool_result.output))} articles regarding '{query}'...", spinner="dots4")
-                        elif tool.name == 'web_search':
-                            status.update(f"Reading through {len(json.loads(tool_result.output))} web results for '{query}'...", spinner="dots4")
+                        status.update(after_call_status_message(tool, tool_call, tool_result), spinner=spinner(tool))
                         if args.verbose:
                             console.print(f"Tool {tool.name} called with arguments {tool_call.arguments} returned {tool_result.output}")
+                    
                     response = conversation.chain(build_prompt(cmd), system=sysprompt, before_call=before_call, after_call=after_call)
 
                     response_text = response.text()
@@ -214,20 +210,14 @@ else:
 if args.verbose:
     print(f"Pipe your shell into {fifo_path}")
 
+# Load the time and web toolboxes
+llm_tools = [Clock(), Web()]
 # Attempt to load the knowledgebase tool
-knowledgebase = None
-websearch = None
-llm_tools = []
 try:
     knowledgebase = KnowledgeBase(args.kb_collection, args.kb_database)
-    llm_tools.append(knowledgebase.knowledgebase_search)
+    llm_tools.append(knowledgebase)
 except llm.embeddings.Collection.DoesNotExist:
     print(f"⚠️ No knowledgebase called {args.kb_collection} found within {args.kb_database if args.kb_database else 'llm\'s default embeddings database'}")
-
-# Load the web search tools
-websearch = WebSearch()
-llm_tools.append(websearch.web_search)
-llm_tools.append(websearch.read_url)
 
 # Configure the model
 model = llm.get_model(args.model)

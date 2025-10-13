@@ -1,19 +1,20 @@
-from this import d
 from ddgs import DDGS
 import trafilatura
+from llm import Toolbox
 
 
-class WebSearch:
+class Web(Toolbox):
     """
-    A simple web search tool
+    Tools for searching the web and reading URLs
     """
     def __init__(self):
         """
         Initialize the WebSearch client.
         """
+        super().__init__()
         self.ddgs = DDGS()
 
-    def web_search(self, query: str, max_results: int = 5) -> list[dict]:
+    def search(self, query: str, max_results: int = 5) -> list[dict]:
         """
         Search the web for content relevant to the query.
         
