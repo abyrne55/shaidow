@@ -10,6 +10,7 @@ Shaidow splits your terminal in half, allowing you to work like you normally wou
 - **Intelligent Suggestions**: Get relevant follow-up commands and investigation paths
 - **Inline DMs**: Use `# comments` to directly communicate with the LLM
 - **SOP Integration**: Load Standard Operating Procedures to guide AI responses
+- **Tools**: Clock, KnowledgeBase, and Web search integrate external information for grounded responses
 - **LLM Agnostic**: Works with any model supported by the [`llm` Python package](https://llm.datasette.io/en/stable/) (e.g., Gemini, ChatGPT, and local models)
 
 ## Setup
@@ -17,9 +18,13 @@ Shaidow splits your terminal in half, allowing you to work like you normally wou
 Shaidow relies on the following dependencies:
 
 - Python 3.10+
-- `tmux`, `sed`, and `script` (probably pre-installed, otherwise avilable via your friendly package manager)
+- `tmux`, `sed`, and `script` (probably pre-installed, otherwise available via your friendly package manager)
   - Note that `script` might be hidden within a package named something like `util-linux`
-- `llm` and `rich` Python packages (`pip3 install -r requirements.txt`)
+- A handful of Python packages (`pip3 install -r requirements.txt -c constraints.txt`)
+   - [`llm`](https://llm.datasette.io/en/stable/) for vendor-neutral access to LLMs
+   - [`rich`](https://rich.readthedocs.io/en/stable/) for output formatting
+   - [`ddgs`](https://github.com/deedy5/ddgs) for web search
+   - [`trafilatura`](https://github.com/adbar/trafilatura) for web page distillation
 - [`script2json` Golang tool](https://github.com/abyrne55/script2json) for converting `script`'s output into JSON
 
 Use the following steps to install and configure these dependencies (excluding Python; you're on your own for that).
@@ -59,6 +64,44 @@ Use the following steps to install and configure these dependencies (excluding P
    llm -m orca-mini-3b-gguf2-q4_0 "Hello World"
    ```
 
+### Knowledge Base Setup (optional)
+You can give your LLM assistant on-demand access to a "knowledge base" of local documents (e.g., a Git repo full of SOPs in Markdown format). This feature relies on [`llm`'s embeddings-related functionality](https://llm.datasette.io/en/stable/embeddings/index.html). If configured, the LLM will search the knowledge base for most SRE-specific questions before performing a wider web search. 
+
+After activating your virtual environment (if applicable; see above), use the following steps to set this up:
+
+1. Set `llm`'s default embeddings model. See [the llm docs](https://llm.datasette.io/en/stable/plugins/directory.html#embedding-models) for some embedding-specific plugins you can install if your existing models don't work for you.
+   ```bash
+   # List available embeddings models
+   llm embed-models list
+
+   # Set the default model (e.g., Gemini's "text-embedding" model)
+   llm embed-models default text-embedding-004
+   ```
+2. `cd` into the root of your cache of documents, and create a collection of embeddings. The example below creates a collection called "ops-sop" out of all of the Markdown files within the current directory and its subdirectories (recursively). The `--store` flag is important, as it tells `llm` to store a copy of each document alongside its embedding. Shaidow will use the resulting embeddings database to find and read documents similar to the query term
+   ```bash
+   llm embed-multi --files ./ '**/*.md' --store ops-sop
+   # This will take a few minutes
+   ```
+3. Once embeddings have been generated, you can do a test search using `llm similar`
+   ```bash
+   llm similar ops-sop -c "disk pressure" --plain | less
+   # v4/alerts/KubePersistentVolumeFullInFourDaysLayeredProduct.md (0.5438262299243574)
+   #
+   ## KubePersistentVolumeFullInFourDaysLayeredProduct
+   #**Table of Contents**
+   #- [Check Description](#check-description)
+   #- [Troubleshooting](#troubleshooting)
+   # ...
+   #
+   #v4/alerts/etcdHighFsyncDurations.md (0.5436313728466821)
+   #
+   ## etcdHighFsyncDurations
+   #
+   #The alert `etcdHighFsyncDurations` is fired when 99 percentile fsync duration for an etcd instance exceeds 1 second for 10 minutes. A `wal_fsync` is called when etcd persists its log entries to disk before applying them. High disk operation latencies  often indicate disk issues. It may cause high request latency or make the cluster unstable.
+   # ...
+   ```
+And that's it! Shaidow will automatically use any collection named "ops-sop" that's stored in `llm`'s default embeddings database (see `llm collections path`). If you'd prefer to store your embeddings elsewhere or name your collections differently, make sure you use the `--kb-collection` and/or `--kb-database` flags when starting Shaidow (see *[Other Options](#other-options)*).
+
 ## Usage
 
 Run `./start.sh -m $MODEL_NAME`, specifying any of the LLM names/aliases shown by `llm list models`. Running start.sh without any arguments will default to using Google's Gemini 2.5 Pro. Note that start.sh will emit some warnings if `llm` hasn't been pre-configured with any remote model API keys. If you're only using local models, you can silence these warnings by setting `SKIP_KEY_CHECK=1` before running start.sh. 
@@ -91,6 +134,18 @@ Type `##` to automatically paste the last command suggested by the LLM into your
 #### Ignored Commands (`#i`)
 Append `#i` to any command to prevent the assistant from seeing or analyzing it. This is useful for running unrelated commands or interactive programs (like `watch` or `top`) that would clutter the assistant's context. The command still executes normally in your shell.
 
+### Tools
+Shaidow gives your AI assistant access to a few [tools](https://llm.datasette.io/en/stable/tools.html) (technically [toolboxes](https://llm.datasette.io/en/stable/python-api.html#toolbox-classes)) that it can use to inform its responses. The LLM will automatically invoke these tools as needed to provide more accurate and contextual assistance. You can also explicitly instruct the LLM to use a tool (e.g., `# Start the stopwatch`) 
+ * **Web**: basic internet access tools
+   * `search`: get a list of URLs and content snippets related to a search query (uses `ddgs`)
+   * `read_url`: fetch a web page and distill it to Markdown format (uses `trafilatura`)
+ * **Clock**: simple time management tools
+   * `local_time` and `utc_time`: get current local/UTC time in ISO 8601 format (useful when looking at timestamped logs)
+   * `start_stopwatch` and `check_stopwatch`: simple elapsed time counter that LLM can use to get a sense of how long to wait, e.g., for a node to restart
+ * **KnowledgeBase**: search local documents (see _[Knowledge Base Setup](#knowledge-base-setup-optional)_)
+   * `search`: search the knowledgebase for documents relevant to a query
+   * `read_id`: read the content of a document by its ID
+
 ### Injecting SOPs
 Use the `-s` flag to provide local copies of Markdown-formatted standard operating procedure (SOP) documents to the LLM. You can provide as many SOPs as you'd like; just keep in mind the context window size of whichever model you're using.
 ```bash
@@ -111,11 +166,14 @@ $ # I just checked the AWS console, and it looks like node2 has been terminated.
 [LLM Response] Ah, that would explain why it's NotReady! Yes, the SOP says to contact the cluster administrator and ask them to...
 ```
 
+Note that you can also just ask the LLM to pull up a specific SOP using the [KnowledgeBase](#knowledge-base-setup-optional) toolbox
+
 ### Other Options
 Any flags passed to start.sh are passed along to shaidow.py (a.k.a. what runs in the "right pane"). Run `python3 shaidow.py -h` for more information about the flags it accepts
 ```
 $ python3 shaidow.py -h
-usage: shaidow.py [-h] [--fifo FIFO] [--sop SOP] [--verbose] [--model MODEL] [--sysprompt-only-once] [--tmux-shell-pane TMUX_SHELL_PANE]
+usage: shaidow.py [-h] [--fifo FIFO] [--sop SOP] [--verbose] [--model MODEL] [--sysprompt-only-once]
+                  [--tmux-shell-pane TMUX_SHELL_PANE] [--kb-collection KB_COLLECTION] [--kb-database KB_DATABASE]
 
 SRE assistant that reads commands from a FIFO
 
@@ -126,9 +184,15 @@ options:
   --verbose, -v         Verbose output (including LLM token usage)
   --model, -m MODEL     LLM to use (default: gemini-2.5-pro)
   --sysprompt-only-once, -p
-                        only provide the system prompt during LLM initialization — helpful for models with small context windows (default: provide sysprompt with each request)
+                        only provide the system prompt during LLM initialization — helpful for models with small context
+                        windows (default: provide sysprompt with each request)
   --tmux-shell-pane, -t TMUX_SHELL_PANE
                         ID of the tmux pane containing the shell being recorded
+  --kb-collection, -k KB_COLLECTION
+                        Name of the knowledgebase collection to use (default: ops-sop)
+  --kb-database, -d KB_DATABASE
+                        Path to the SQLite database containing the knowledgebase collection (default: llm's default
+                        embeddings database)
 ```
 
 ## Technical Details
@@ -145,10 +209,11 @@ It turns out that live-recording shell commands and their outputs in a structure
 * **Race Conditions**: `script2json` relies on the shell to send signals (i.e., SIGUSR1 and SIGUSR2) at precise moments in order to differentiate between user input and command output. While not frequently encountered during testing, these signals can arrive late or out-of-order when your system is under heavy load, causing commands/outputs to be missed, corrupted, or desynchronized. Restarting Shaidow will fix most cases like this. Consider also `renice`ing the `script` and `script2json` processes
 * **Interactive Commands**: Full-screen interactive programs like `watch`, `top`, `vim`, or `htop` don't work well with Shaidow's recording mechanism. Their dynamic output isn't captured in a structured format, so the LLM won't see meaningful updates. Append `#i` to these commands to prevent the assistant from trying to analyze them.
 * **Subshells (e.g., `ssh`, `oc debug`)**: Commands run inside subshells (like `ssh host` or `oc debug node/xyz`) may not be captured and sent to the assistant until the subshell exits (if at all). The new shell lacks the Bash instrumentation (DEBUG trap, PROMPT_COMMAND, signal handlers) that enables command recording. Consider running individual commands with `-c` flags (e.g., `ssh host "command"`) instead of entering interactive subshells.
+* **Ctrl-C**: There's a known bug where pressing Ctrl-C at the prompt causes `script2json` to send the most recently-executed command to Shaidow, making the LLM think that said recent command was run (again) and produced no output. This doesn't affect pressing Ctrl-C while a program is running.
 
 ### System Prompt 
-The AI is optimized for SRE workflows but can be customized by editing the `system_prompt` in `shaidow.py`. Here's what Claude 4 Sonnet says when asked to summarize the "stock" system prompt:
-> The system prompt defines an AI assistant designed to help site reliability engineers (SREs) investigate OpenShift 4 cluster problems by analyzing shell command outputs and highlighting important information they might miss. The assistant is programmed to suggest follow-up commands, respond to direct messages via shell comments, and ask clarifying questions while maintaining a concise communication style of less than 19 words on average. It can incorporate standard operating procedures (SOPs) into its responses and offers to help update them, while always deferring to the SRE's judgment and avoiding responses when it cannot meaningfully contribute to the investigation.
+The AI is optimized for SRE workflows but can be customized by editing the `system_prompt` in `shaidow.py`. Here's what Claude 4.5 Sonnet says when asked to summarize the "stock" system prompt:
+> This system prompt defines an AI assistant designed to help site reliability engineers (SREs) investigate problems with OpenShift 4 clusters by analyzing shell command outputs and highlighting important information they might have missed. The assistant proactively suggests investigative commands, responds to direct questions via shell comments, and leverages various tools including a knowledge base of SOPs and web search to ground its responses in factual information. It maintains a very concise communication style, keeps track of standard operating procedures to help update them based on real-world investigations, and always defers to the SRE's judgment rather than being prescriptive. The overall design emphasizes being a helpful investigative partner that surfaces insights without being verbose or intrusive.
 
 ### SOPs
 SOPs provided by the user are given to `llm` as ["fragments"](https://llm.datasette.io/en/stable/fragments.html) attached to the "Hello" query that's used to initialize the model. Every LLM plugin handles fragments a little differently, but in practice, it doesn't seem all that much different from just running `cat /path/to/sop.md` in Shaidow's left pane.
