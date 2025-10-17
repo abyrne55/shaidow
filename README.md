@@ -214,9 +214,13 @@ It turns out that live-recording shell commands and their outputs in a structure
 * **Subshells (e.g., `ssh`, `oc debug`)**: Commands run inside subshells (like `ssh host` or `oc debug node/xyz`) may not be captured and sent to the assistant until the subshell exits (if at all). The new shell lacks the Bash instrumentation (DEBUG trap, PROMPT_COMMAND, signal handlers) that enables command recording. Consider running individual commands with `-c` flags (e.g., `ssh host "command"`) instead of entering interactive subshells.
 * **Ctrl-C**: There's a known bug where pressing Ctrl-C at the prompt causes `script2json` to send the most recently-executed command to Shaidow, making the LLM think that said recent command was run (again) and produced no output. This doesn't affect pressing Ctrl-C while a program is running.
 
-### System Prompt 
-The AI is optimized for SRE workflows but can be customized by editing the `system_prompt` in `shaidow.py`. Here's what Claude 4.5 Sonnet says when asked to summarize the "stock" system prompt:
-> This system prompt defines an AI assistant designed to help site reliability engineers (SREs) investigate problems with OpenShift 4 clusters by analyzing shell command outputs and highlighting important information they might have missed. The assistant proactively suggests investigative commands, responds to direct questions via shell comments, and leverages various tools including a knowledge base of SOPs and web search to ground its responses in factual information. It maintains a very concise communication style, keeps track of standard operating procedures to help update them based on real-world investigations, and always defers to the SRE's judgment rather than being prescriptive. The overall design emphasizes being a helpful investigative partner that surfaces insights without being verbose or intrusive.
+### System Prompt
+The AI is optimized for SRE workflows but can be customized by editing `system_prompt.txt`. The prompt emphasizes:
+- Concise responses (average <19 words, excluding commands)
+- Silent tool use (no commentary between tool calls)
+- Practical command suggestions (single-line, no backslash continuations)
+- Deference to SRE judgment and investigation path
+- SOP awareness with suggestions for updates when needed
 
 ### SOPs
 SOPs provided by the user are given to `llm` as ["fragments"](https://llm.datasette.io/en/stable/fragments.html) attached to the "Hello" query that's used to initialize the model. Every LLM plugin handles fragments a little differently, but in practice, it doesn't seem all that much different from just running `cat /path/to/sop.md` in Shaidow's left pane.

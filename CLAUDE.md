@@ -39,6 +39,7 @@ Shaidow is a **terminal companion tool** that provides real-time AI assistance f
 ```
 shaidow/
 ├── shaidow.py           # Main AI assistant application
+├── system_prompt.txt    # LLM system prompt (loaded by shaidow.py)
 ├── start.sh             # Session setup and launcher
 ├── README.md            # User documentation
 ├── CLAUDE.md            # Project overview for Claude
@@ -181,8 +182,9 @@ All tests focus on actual application logic, not Python language features or lib
 5. Add tests in `tools/test_<toolname>.py`
 
 ### Modifying System Prompt
-- Edit `system_prompt` variable in `shaidow.py` (line 22)
+- Edit `system_prompt.txt` in the root directory
 - Keep instructions concise and behavior-focused
+- Use structured sections (ROLE, STYLE, etc.) for clarity
 - Test with multiple LLM providers for compatibility
 
 ### Testing Tool Calls
