@@ -142,7 +142,7 @@ INIT_SHELL_CMD="PROMPT_COMMAND='echo \"\$(fc -ln -1 2>/dev/null | sed \"s/^[[:sp
 tmux send-keys -t "$TMUX_SHELL_PANE_ID" "$INIT_SHELL_CMD" Enter
 
 # Split the window vertically and run shaidow.py in the right pane
-tmux split-window -h -t "$SESSION_NAME:0" -c "$SHAIDOW_SRC_DIR" "python3 $SHAIDOW_SRC_DIR/shaidow.py --fifo '$SHAIDOW_FIFO_PATH' --tmux-shell-pane '$TMUX_SHELL_PANE_ID' $*"
+tmux split-window -h -t "$SESSION_NAME:0" -c "$SHAIDOW_SRC_DIR" "python3 $SHAIDOW_SRC_DIR/shaidow.py --fifo '$SHAIDOW_FIFO_PATH' --tmux-shell-pane '$TMUX_SHELL_PANE_ID' --script2json-pid '$S2J_PID' $*"
 
 # Disable the status bar
 tmux set-option -t "$SESSION_NAME" status off

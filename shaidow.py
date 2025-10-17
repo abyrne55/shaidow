@@ -5,6 +5,7 @@ import os
 import tempfile
 import argparse
 import subprocess
+import signal
 from datetime import datetime
 from rich import print
 from rich.console import Console
@@ -100,7 +101,7 @@ def build_prompt(cmd: Command):
     The command finished executing at {cmd.return_timestamp.isoformat(timespec='seconds')}
     """
 
-def main(conversation: llm.Conversation, fifo_path: str, sysprompt_only_once: bool, tmux_shell_pane: str = None):
+def main(conversation: llm.Conversation, fifo_path: str, sysprompt_only_once: bool, tmux_shell_pane: str = None, script2json_pid: int = None):
     with open(fifo_path, 'r') as fifo:
         while True:
             line = fifo.readline()
@@ -117,6 +118,22 @@ def main(conversation: llm.Conversation, fifo_path: str, sysprompt_only_once: bo
             # Skip the initial PROMPT_COMMAND setting or commands ending with #i
             stripped_cmd = cmd.command.strip()
             if cmd.command.startswith("PROMPT_COMMAND") or stripped_cmd.endswith("#i"):
+                continue
+
+            # Handle "#reset" command to reset script2json state
+            if stripped_cmd == "#reset":
+                if script2json_pid:
+                    try:
+                        os.kill(script2json_pid, signal.SIGHUP)
+                        console.print("Reset signal sent to script2json", style="green")
+                    except ProcessLookupError:
+                        console.print(f"Error: script2json process not found (PID: {script2json_pid})", style="red")
+                    except PermissionError:
+                        console.print(f"Error: Permission denied to send signal to PID {script2json_pid}", style="red")
+                    except Exception as e:
+                        console.print(f"Error sending reset signal: {e}", style="red")
+                else:
+                    console.print("Error: script2json PID not configured", style="yellow")
                 continue
 
             # Handle "type suggested command" directive
@@ -191,6 +208,7 @@ parser.add_argument('--sysprompt-only-once', '-p', action='store_true', default=
 parser.add_argument('--tmux-shell-pane', '-t', type=str, help='ID of the tmux pane containing the shell being recorded')
 parser.add_argument('--kb-collection', '-k', type=str, default='ops-sop', help='Name of the knowledgebase collection to use (default: ops-sop)')
 parser.add_argument('--kb-database', '-d', type=str, help='Path to the SQLite database containing the knowledgebase collection (default: llm\'s default embeddings database)')
+parser.add_argument('--script2json-pid', type=int, help='PID of the script2json process (enables #reset command)')
 
 args = parser.parse_args()
 
@@ -242,7 +260,7 @@ with console.status("Initializing LLM..."):
         console.print(init_response.usage(), style="dim italic")
 
 # Start the main chat loop
-main(conversation, fifo_path, args.sysprompt_only_once, args.tmux_shell_pane)
+main(conversation, fifo_path, args.sysprompt_only_once, args.tmux_shell_pane, args.script2json_pid)
 
 # Clean up the FIFO and temporary directory after main completes
 try:
