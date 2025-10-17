@@ -40,17 +40,19 @@ Shaidow is a **terminal companion tool** that provides real-time AI assistance f
 shaidow/
 ├── shaidow.py           # Main AI assistant application
 ├── start.sh             # Session setup and launcher
-├── shell.sh             # Shell configuration script
 ├── README.md            # User documentation
-├── SHELL_README.md      # Shell-specific docs
+├── CLAUDE.md            # Project overview for Claude
 ├── requirements.txt     # Python dependencies
 ├── constraints.txt      # Dependency version constraints
 ├── .env                 # Environment variables (API keys, etc.)
+├── test_shaidow.py      # Tests for main application
 └── tools/
     ├── __init__.py      # Tool utilities and status messages
     ├── clock.py         # Time-related tools
     ├── web.py           # Web search and fetching
-    └── knowledgebase.py # Local document search
+    ├── knowledgebase.py # Local document search
+    ├── test_init.py     # Tests for tool utilities
+    └── test_knowledgebase.py # Tests for KnowledgeBase tool
 ```
 
 ## Key Features & Implementation
@@ -132,14 +134,54 @@ The AI assistant is configured to:
 
 ## Development Notes
 
+### Code Structure and Testability
+
+shaidow.py is refactored for testability:
+- Type hints throughout for clarity
+- No global variables - all dependencies passed as parameters
+- `main()` function accepts dependencies (conversation, console, etc.)
+- `run_shaidow()` wrapper handles initialization and cleanup
+- Pure functions for core logic (Command parsing, prompt building, markdown extraction)
+
+### Testing
+
+The project has comprehensive test coverage with 27 focused tests:
+
+**test_shaidow.py** (15 tests):
+- Command class initialization and JSON parsing
+- Timestamp handling (ISO8601 with Z and +00:00 formats)
+- Prompt building for regular commands and shell comments
+- Code block extraction from Markdown responses
+- Token flattening with proper fence/image handling
+
+**tools/test_init.py** (7 tests):
+- Template variable substitution in status messages
+- Fallback behavior for unregistered tools
+- JSON result counting for after-call messages
+- Spinner selection based on tool type
+
+**tools/test_knowledgebase.py** (5 tests):
+- Initialization with default and custom database paths
+- Search with relevance filtering (0.04 threshold from top score)
+- Document reading by ID
+
+Run tests with:
+```bash
+source .venv/bin/activate  # or your venv path
+python -m pytest test_shaidow.py tools/test_init.py tools/test_knowledgebase.py -v
+```
+
+All tests focus on actual application logic, not Python language features or library behavior.
+
 ### Adding New Tools
 1. Create a new file in `tools/` directory
 2. Implement a class with `__init__` that registers tool methods
 3. Use `@llm.hookimpl` decorators (follow existing tool patterns)
-4. Import and register in `shaidow.py` main function
+4. Import and register in `shaidow.py` run_shaidow function
+5. Add tests in `tools/test_<toolname>.py`
 
 ### Modifying System Prompt
-- Edit `system_prompt` variable in `shaidow.py` (line 20)
+- Edit `system_prompt` variable in `shaidow.py` (line 22)
 - Keep instructions concise and behavior-focused
 - Test with multiple LLM providers for compatibility
 

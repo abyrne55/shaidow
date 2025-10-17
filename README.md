@@ -220,3 +220,6 @@ The AI is optimized for SRE workflows but can be customized by editing the `syst
 
 ### SOPs
 SOPs provided by the user are given to `llm` as ["fragments"](https://llm.datasette.io/en/stable/fragments.html) attached to the "Hello" query that's used to initialize the model. Every LLM plugin handles fragments a little differently, but in practice, it doesn't seem all that much different from just running `cat /path/to/sop.md` in Shaidow's left pane.
+
+## Development
+Run tests with `source .venv/bin/activate && python -m pytest test_shaidow.py tools/test_init.py tools/test_knowledgebase.py -v`
