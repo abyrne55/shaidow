@@ -6,6 +6,7 @@ import tempfile
 import argparse
 import subprocess
 import signal
+from typing import Generator, Optional, List
 from datetime import datetime
 from rich import print
 from rich.console import Console
@@ -38,13 +39,9 @@ If you notice signs of desynchronization between commands and their outputs (e.g
 Keep your responses very concise, i.e., less than 19 words on average, excluding suggested commands. Don't comment until you've finished any necessary tool calls. Avoid redundant phrases like "Please share the output", "I see that you ran that command", and "I'm going to try another tool."
 Use Markdown formatting where appropriate. Use emoji sparingly.
 """
-console = Console(theme=Theme({"markdown.code": "bold green on gray93", "markdown.code_block": "green on gray93"}))
-
-# Recorded suggested commands in the order they were suggested (oldest first)
-suggested_commands = []
 
 # Borrowed from https://rich.readthedocs.io/en/latest/_modules/rich/markdown.html#Markdown
-def flatten_markdown_tokens(tokens):
+def flatten_markdown_tokens(tokens) -> Generator:
     """Flattens the Markdown token stream."""
     for token in tokens:
         is_fence = token.type == "fence"
@@ -54,30 +51,35 @@ def flatten_markdown_tokens(tokens):
         else:
             yield token
 
-def record_suggested_command(llm_response_markdown):
-    """Record any suggested commands from the LLM's response."""
-    global suggested_commands
-    code_blocks = [token.content.strip() for token in flatten_markdown_tokens(llm_response_markdown.parsed) if token.type == "fence" and token.tag == "code"]
-    suggested_commands += code_blocks
+
+def extract_code_blocks_from_markdown(llm_response_markdown: Markdown) -> List[str]:
+    """Extract code blocks from a Markdown response."""
+    code_blocks = [
+        token.content.strip()
+        for token in flatten_markdown_tokens(llm_response_markdown.parsed)
+        if token.type == "fence" and token.tag == "code"
+    ]
+    return code_blocks
+
 
 class Command:
-    def __init__(self, id, command, output, return_timestamp):
-        self.id = id
-        self.command = command
-        self.output = output
-        self.return_timestamp = return_timestamp
+    def __init__(self, id: str, command: str, output: str, return_timestamp: Optional[datetime]):
+        self.id: str = id
+        self.command: str = command
+        self.output: str = output
+        self.return_timestamp: Optional[datetime] = return_timestamp
 
     @classmethod
-    def from_json(cls, json_str):
+    def from_json(cls, json_str: str) -> 'Command':
         data = json.loads(json_str)
-        
+
         # Parse return_timestamp from ISO8601 format
         timestamp_value = data.get("return_timestamp")
         if timestamp_value:
             return_timestamp = datetime.fromisoformat(timestamp_value.replace('Z', '+00:00'))
         else:
             return_timestamp = None
-            
+
         return cls(
             id=data.get("id"),
             command=data.get("command"),
@@ -85,11 +87,13 @@ class Command:
             return_timestamp=return_timestamp
         )
 
-def build_prompt(cmd: Command):
+
+def build_prompt(cmd: Command) -> str:
+    """Build a prompt for the LLM based on the command."""
     # Forward shell comments directly to the LLM
     if cmd.command.strip().startswith("#"):
         return cmd.command
-    
+
     return f"""
     I ran the following command
     ```sh
@@ -102,14 +106,24 @@ def build_prompt(cmd: Command):
     The command finished executing at {cmd.return_timestamp.isoformat(timespec='seconds')}
     """
 
-def main(conversation: llm.Conversation, fifo_path: str, sysprompt_only_once: bool, tmux_shell_pane: str = None, script2json_pid: int = None):
+
+def main(
+    conversation: llm.Conversation,
+    fifo_path: str,
+    sysprompt_only_once: bool,
+    verbose: bool,
+    console: Console,
+    suggested_commands: List[str],
+    tmux_shell_pane: Optional[str] = None,
+    script2json_pid: Optional[int] = None
+) -> None:
+    """Main loop that processes commands from FIFO and interacts with LLM."""
     with open(fifo_path, 'r') as fifo:
         while True:
             line = fifo.readline()
             if not line:  # EOF, writer closed
-                # print(f"Writer closed the FIFO.")
-                # break
                 continue
+
             try:
                 cmd = Command.from_json(line)
             except (json.JSONDecodeError, KeyError) as e:
@@ -144,7 +158,7 @@ def main(conversation: llm.Conversation, fifo_path: str, sysprompt_only_once: bo
                         # Map number of #'s to command index (## = last, ### = second-to-last, etc.)
                         num_hashes = len(stripped_cmd)
                         command_index = num_hashes - 2  # ## maps to index -1 (last), ### to index -2, etc.
-                        
+
                         if command_index < len(suggested_commands):
                             # Get newline-scrubbed command from the end of the list (most recent first)
                             command_to_send = suggested_commands[-(command_index + 1)].replace('\n', '; ')
@@ -165,109 +179,137 @@ def main(conversation: llm.Conversation, fifo_path: str, sysprompt_only_once: bo
                     (escape(f"[{cmd.id}]"), "dim bold"),
                     (escape(f" {cmd.command}"), "dim")
                 )
-                if not args.verbose:
+                if not verbose:
                     header.truncate(40, overflow="ellipsis")
                 console.print("")
                 console.rule(header, align="left", style="dim")
-                response_text = ""
-                response_usage = None
-                if sysprompt_only_once:
-                    sysprompt = None
-                else:
-                    sysprompt = system_prompt
-                with console.status("Thinking...") as status:
-                    def before_call(tool: llm.Tool, tool_call: llm.ToolCall):
-                        status.update(during_call_status_message(tool, tool_call), spinner=spinner(tool))
-                    
-                    def after_call(tool: llm.Tool, tool_call: llm.ToolCall, tool_result: llm.ToolResult):
-                        status.update(after_call_status_message(tool, tool_call, tool_result), spinner=spinner(tool))
-                        if args.verbose:
-                            console.print(f"Tool {tool.name} called with arguments {tool_call.arguments} returned {tool_result.output}")
-                    
-                    response = conversation.chain(build_prompt(cmd), system=sysprompt, before_call=before_call, after_call=after_call)
 
+                sysprompt = None if sysprompt_only_once else system_prompt
+
+                with console.status("Thinking...") as status:
+                    def before_call(tool: llm.Tool, tool_call: llm.ToolCall) -> None:
+                        status.update(during_call_status_message(tool, tool_call), spinner=spinner(tool))
+
+                    def after_call(tool: llm.Tool, tool_call: llm.ToolCall, tool_result: llm.ToolResult) -> None:
+                        status.update(after_call_status_message(tool, tool_call, tool_result), spinner=spinner(tool))
+                        if verbose:
+                            console.print(f"Tool {tool.name} called with arguments {tool_call.arguments} returned {tool_result.output}")
+
+                    response = conversation.chain(build_prompt(cmd), system=sysprompt, before_call=before_call, after_call=after_call)
                     response_text = response.text()
                     response_usage = list(r.usage() for r in response.responses())
-                        
+
                 response_md = Markdown(response_text)
                 console.print(response_md)
-                record_suggested_command(response_md)
-                if args.verbose:
+
+                # Extract and record suggested commands
+                new_commands = extract_code_blocks_from_markdown(response_md)
+                suggested_commands.extend(new_commands)
+
+                if verbose:
                     console.print(response_usage, style="dim italic")
             except Exception as e:
                 console.print(f"Error processing command {cmd.id}: {e}")
                 continue
 
-# Parse command line arguments
-parser = argparse.ArgumentParser(description='SRE assistant that reads commands from a FIFO')
-parser.add_argument('--fifo', '-f', type=str, help='Path to FIFO file (will be created if it does not exist)')
-parser.add_argument('--sop', '-s', action='append', type=argparse.FileType('r', encoding='UTF-8'), help="Path to a local copy of an SOP to add to the LLM's context window")
-parser.add_argument('--verbose', '-v', action='store_true', help="Verbose output (including LLM token usage)")
-parser.add_argument('--model', '-m', type=str, default='gemini-2.5-pro', help='LLM to use (default: gemini-2.5-pro)')
-parser.add_argument('--sysprompt-only-once', '-p', action='store_true', default=False,
-                    help="only provide the system prompt during LLM initialization — helpful for models with small context windows (default: provide sysprompt with each request)")
-parser.add_argument('--tmux-shell-pane', '-t', type=str, help='ID of the tmux pane containing the shell being recorded')
-parser.add_argument('--kb-collection', '-k', type=str, default='ops-sop', help='Name of the knowledgebase collection to use (default: ops-sop)')
-parser.add_argument('--kb-database', '-d', type=str, help='Path to the SQLite database containing the knowledgebase collection (default: llm\'s default embeddings database)')
-parser.add_argument('--script2json-pid', type=int, help='PID of the script2json process (enables #reset command)')
 
-args = parser.parse_args()
+def run_shaidow() -> None:
+    """Initialize and run the Shaidow application."""
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='SRE assistant that reads commands from a FIFO')
+    parser.add_argument('--fifo', '-f', type=str, help='Path to FIFO file (will be created if it does not exist)')
+    parser.add_argument('--sop', '-s', action='append', type=argparse.FileType('r', encoding='UTF-8'), help="Path to a local copy of an SOP to add to the LLM's context window")
+    parser.add_argument('--verbose', '-v', action='store_true', help="Verbose output (including LLM token usage)")
+    parser.add_argument('--model', '-m', type=str, default='gemini-2.5-pro', help='LLM to use (default: gemini-2.5-pro)')
+    parser.add_argument('--sysprompt-only-once', '-p', action='store_true', default=False,
+                        help="only provide the system prompt during LLM initialization — helpful for models with small context windows (default: provide sysprompt with each request)")
+    parser.add_argument('--tmux-shell-pane', '-t', type=str, help='ID of the tmux pane containing the shell being recorded')
+    parser.add_argument('--kb-collection', '-k', type=str, default='ops-sop', help='Name of the knowledgebase collection to use (default: ops-sop)')
+    parser.add_argument('--kb-database', '-d', type=str, help='Path to the SQLite database containing the knowledgebase collection (default: llm\'s default embeddings database)')
+    parser.add_argument('--script2json-pid', type=int, help='PID of the script2json process (enables #reset command)')
 
-# Create a FIFO
-if args.fifo:
-    # Create the FIFO if it doesn't exist
-    fifo_path = args.fifo
-    if not os.path.exists(fifo_path):
+    args = parser.parse_args()
+
+    # Create console for output
+    console = Console(theme=Theme({"markdown.code": "bold green on gray93", "markdown.code_block": "green on gray93"}))
+
+    # List to track suggested commands
+    suggested_commands: List[str] = []
+
+    # Create a FIFO
+    temp_dir = None
+    if args.fifo:
+        # Create the FIFO if it doesn't exist
+        fifo_path = args.fifo
+        if not os.path.exists(fifo_path):
+            os.mkfifo(fifo_path)
+    else:
+        # Fallback to original behavior
+        temp_dir = tempfile.mkdtemp(prefix="shaidow_")
+        fifo_path = os.path.join(temp_dir, "fifo")
         os.mkfifo(fifo_path)
-    temp_dir = None  # We didn't create a temp dir
-else:
-    # Fallback to original behavior
-    temp_dir = tempfile.mkdtemp(prefix="shaidow_")
-    fifo_path = os.path.join(temp_dir, "fifo")
-    os.mkfifo(fifo_path)
 
-if args.verbose:
-    print(f"Pipe your shell into {fifo_path}")
-
-# Load the time and web toolboxes
-llm_tools = [Clock(), Web()]
-# Attempt to load the knowledgebase tool
-try:
-    knowledgebase = KnowledgeBase(args.kb_collection, args.kb_database)
-    llm_tools.append(knowledgebase)
-except llm.embeddings.Collection.DoesNotExist:
-    print(f"⚠️ No knowledgebase called {args.kb_collection} found within {args.kb_database if args.kb_database else 'llm\'s default embeddings database'}")
-
-# Configure the model
-model = llm.get_model(args.model)
-conversation = model.conversation(tools=llm_tools)
-
-# Read any SOPs
-sops = []
-if args.sop:
-    sops = [sop.read() for sop in args.sop]
     if args.verbose:
-        print(f"Providing {len(sops)} SOPs to the LLM")
-        for i, sop in enumerate(sops):
-            print(f"{i}: {sop[:50].replace('\n', '\\n ')}...")
+        print(f"Pipe your shell into {fifo_path}")
 
-# Initialize the conversation, providing the system prompt and any SOPs
-with console.status("Initializing LLM..."):
-    init_response = conversation.prompt("# Hello!", system=system_prompt, fragments=sops)
-    init_response_md = Markdown(init_response.text())
-    console.print(init_response_md)
-    record_suggested_command(init_response_md)
-    if args.verbose:
-        console.print(init_response.usage(), style="dim italic")
+    # Load the time and web toolboxes
+    llm_tools: List[llm.Toolbox] = [Clock(), Web()]
 
-# Start the main chat loop
-main(conversation, fifo_path, args.sysprompt_only_once, args.tmux_shell_pane, args.script2json_pid)
+    # Attempt to load the knowledgebase tool
+    try:
+        knowledgebase = KnowledgeBase(args.kb_collection, args.kb_database)
+        llm_tools.append(knowledgebase)
+    except llm.embeddings.Collection.DoesNotExist:
+        print(f"⚠️ No knowledgebase called {args.kb_collection} found within {args.kb_database if args.kb_database else 'llm\'s default embeddings database'}")
 
-# Clean up the FIFO and temporary directory after main completes
-try:
-    # Only remove the FIFO if we created a temporary one
-    if temp_dir:
-        os.remove(fifo_path)
-        os.rmdir(temp_dir)
-except Exception as e:
-    print(f"Cleanup error: {e}")
+    # Configure the model
+    model = llm.get_model(args.model)
+    conversation = model.conversation(tools=llm_tools)
+
+    # Read any SOPs
+    sops: List[str] = []
+    if args.sop:
+        sops = [sop.read() for sop in args.sop]
+        if args.verbose:
+            print(f"Providing {len(sops)} SOPs to the LLM")
+            for i, sop in enumerate(sops):
+                print(f"{i}: {sop[:50].replace('\n', '\\n ')}...")
+
+    # Initialize the conversation, providing the system prompt and any SOPs
+    with console.status("Initializing LLM..."):
+        init_response = conversation.prompt("# Hello!", system=system_prompt, fragments=sops)
+        init_response_md = Markdown(init_response.text())
+        console.print(init_response_md)
+
+        # Extract and record suggested commands from initialization
+        new_commands = extract_code_blocks_from_markdown(init_response_md)
+        suggested_commands.extend(new_commands)
+
+        if args.verbose:
+            console.print(init_response.usage(), style="dim italic")
+
+    try:
+        # Start the main chat loop
+        main(
+            conversation,
+            fifo_path,
+            args.sysprompt_only_once,
+            args.verbose,
+            console,
+            suggested_commands,
+            args.tmux_shell_pane,
+            args.script2json_pid
+        )
+    finally:
+        # Clean up the FIFO and temporary directory
+        try:
+            # Only remove the FIFO if we created a temporary one
+            if temp_dir:
+                os.remove(fifo_path)
+                os.rmdir(temp_dir)
+        except Exception as e:
+            print(f"Cleanup error: {e}")
+
+
+if __name__ == "__main__":
+    run_shaidow()
