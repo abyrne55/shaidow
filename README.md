@@ -131,6 +131,9 @@ You can communicate directly with the LLM by typing `#` followed by your message
 #### Paste Suggested Commands (`##`)
 Type `##` to automatically paste the last command suggested by the LLM into your shell prompt. Use `###` for the second-to-last suggested command, `####` for the third-to-last, and so on. This feature requires the `--tmux-shell-pane` flag to be  set to the ID of your tmux shell pane (`start.sh` does this for you).
 
+#### Reset Pipeline State (`#reset`)
+Type `#reset` to clear the command/output processing pipeline when you notice desynchronization (commands paired with wrong outputs, missing outputs, or corrupted output). This sends a reset signal to `script2json`, clearing all internal buffers and channel queues without requiring a full restart. The assistant may also suggest running `#reset` if it detects signs of desynchronization.
+
 #### Ignored Commands (`#i`)
 Append `#i` to any command to prevent the assistant from seeing or analyzing it. This is useful for running unrelated commands or interactive programs (like `watch` or `top`) that would clutter the assistant's context. The command still executes normally in your shell.
 
@@ -206,7 +209,7 @@ options:
 
 ### Shell
 It turns out that live-recording shell commands and their outputs in a structured format is not a use case well-served by a single widely-available tool. Shaidow relies on `script`, `script2json`, FIFOs, and Bash features (specifically `$PROMPT_COMMAND`, the `DEBUG` trap, and the `fc` built-in) in order to satisfy this use case while still providing users with a fully-functional Bash shell. This approach carries some limitations.
-* **Race Conditions**: `script2json` relies on the shell to send signals (i.e., SIGUSR1 and SIGUSR2) at precise moments in order to differentiate between user input and command output. While not frequently encountered during testing, these signals can arrive late or out-of-order when your system is under heavy load, causing commands/outputs to be missed, corrupted, or desynchronized. Restarting Shaidow will fix most cases like this. Consider also `renice`ing the `script` and `script2json` processes
+* **Race Conditions**: `script2json` relies on the shell to send signals (i.e., SIGUSR1 and SIGUSR2) at precise moments in order to differentiate between user input and command output. While not frequently encountered during testing, these signals can arrive late or out-of-order when your system is under heavy load, causing commands/outputs to be missed, corrupted, or desynchronized. If this happens, type `#reset` to clear the pipeline state without restarting. Consider also `renice`ing the `script` and `script2json` processes.
 * **Interactive Commands**: Full-screen interactive programs like `watch`, `top`, `vim`, or `htop` don't work well with Shaidow's recording mechanism. Their dynamic output isn't captured in a structured format, so the LLM won't see meaningful updates. Append `#i` to these commands to prevent the assistant from trying to analyze them.
 * **Subshells (e.g., `ssh`, `oc debug`)**: Commands run inside subshells (like `ssh host` or `oc debug node/xyz`) may not be captured and sent to the assistant until the subshell exits (if at all). The new shell lacks the Bash instrumentation (DEBUG trap, PROMPT_COMMAND, signal handlers) that enables command recording. Consider running individual commands with `-c` flags (e.g., `ssh host "command"`) instead of entering interactive subshells.
 * **Ctrl-C**: There's a known bug where pressing Ctrl-C at the prompt causes `script2json` to send the most recently-executed command to Shaidow, making the LLM think that said recent command was run (again) and produced no output. This doesn't affect pressing Ctrl-C while a program is running.
